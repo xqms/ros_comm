@@ -693,33 +693,41 @@ void TransportTCP::socketUpdate(int events)
   for (unsigned int i = 0; i < callbacks.size(); ++i)
     callbacks[i]();
 
+  bool should_close = false;
+
   // Now we can re-lock the mutex and handle socket errors
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
-  if (closed_)
   {
-    return;
-  }
-
-  if((events & POLLERR) ||
-     (events & POLLHUP) ||
-     (events & POLLNVAL))
-  {
-    uint32_t error = -1;
-    socklen_t len = sizeof(error);
-    if (getsockopt(sock_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &len) < 0)
+    boost::recursive_mutex::scoped_lock lock(close_mutex_);
+    if (closed_)
     {
-      ROSCPP_LOG_DEBUG("getsockopt failed on socket [%d]", sock_);
+      return;
     }
-  #ifdef _MSC_VER
-    char err[60];
-    strerror_s(err,60,error);
-    ROSCPP_LOG_DEBUG("Socket %d closed with (ERR|HUP|NVAL) events %d: %s", sock_, events, err);
-  #else
-    ROSCPP_LOG_DEBUG("Socket %d closed with (ERR|HUP|NVAL) events %d: %s", sock_, events, strerror(error));
-  #endif
 
-    close();
+    if((events & POLLERR) ||
+      (events & POLLHUP) ||
+      (events & POLLNVAL))
+    {
+      uint32_t error = -1;
+      socklen_t len = sizeof(error);
+      if (getsockopt(sock_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &len) < 0)
+      {
+        ROSCPP_LOG_DEBUG("getsockopt failed on socket [%d]", sock_);
+      }
+    #ifdef _MSC_VER
+      char err[60];
+      strerror_s(err,60,error);
+      ROSCPP_LOG_DEBUG("Socket %d closed with (ERR|HUP|NVAL) events %d: %s", sock_, events, err);
+    #else
+      ROSCPP_LOG_DEBUG("Socket %d closed with (ERR|HUP|NVAL) events %d: %s", sock_, events, strerror(error));
+    #endif
+
+      should_close = true;
+    }
   }
+
+  // Call close() without the mutex held
+  if(should_close)
+    close();
 }
 
 std::string TransportTCP::getTransportInfo()

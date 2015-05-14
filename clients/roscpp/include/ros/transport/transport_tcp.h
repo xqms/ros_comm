@@ -150,6 +150,8 @@ private:
    * @note It is *not* allowed to hold this mutex while calling callbacks, since
    *   those are typically higher-level functions. Calling those with held
    *   mutexes might lead to deadlocks.
+   * @note Calling close() with this mutex held is also forbidden, since it
+   *   will invoke the disconnect callback.
    **/
   boost::recursive_mutex close_mutex_;
 
