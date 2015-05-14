@@ -38,7 +38,7 @@
 #include <ros/types.h>
 #include <ros/transport/transport.h>
 
-#include <boost/thread/recursive_mutex.hpp>
+#include <boost/thread/mutex.hpp>
 #include "ros/io.h"
 #include <ros/common.h>
 
@@ -123,19 +123,21 @@ public:
   virtual const char* getType() { return "TCPROS"; }
 
 private:
+  // All methods prefixed with '_' need to be called with the mutex held.
+
   /**
    * \brief Initializes the assigned socket -- sets it to non-blocking and enables reading
    */
-  bool initializeSocket();
+  bool _initializeSocket();
 
-  bool setNonBlocking();
+  bool _setNonBlocking();
 
   /**
    * \brief Set the socket to be used by this transport
    * \param sock A valid TCP socket
    * \return Whether setting the socket was successful
    */
-  bool setSocket(int sock);
+  bool _setSocket(int sock);
 
   void socketUpdate(int events);
 
@@ -153,7 +155,7 @@ private:
    * @note Calling close() with this mutex held is also forbidden, since it
    *   will invoke the disconnect callback.
    **/
-  boost::recursive_mutex close_mutex_;
+  boost::mutex mutex_;
 
   bool expecting_read_;
   bool expecting_write_;

@@ -67,13 +67,13 @@ TransportTCP::~TransportTCP()
   ROS_ASSERT_MSG(sock_ == -1, "TransportTCP socket [%d] was never closed", sock_);
 }
 
-bool TransportTCP::setSocket(int sock)
+bool TransportTCP::_setSocket(int sock)
 {
   sock_ = sock;
-  return initializeSocket();
+  return _initializeSocket();
 }
 
-bool TransportTCP::setNonBlocking()
+bool TransportTCP::_setNonBlocking()
 {
   if (!(flags_ & SYNCHRONOUS))
   {
@@ -88,11 +88,11 @@ bool TransportTCP::setNonBlocking()
   return true;
 }
 
-bool TransportTCP::initializeSocket()
+bool TransportTCP::_initializeSocket()
 {
   ROS_ASSERT(sock_ != ROS_INVALID_SOCKET);
 
-  if (!setNonBlocking())
+  if (!_setNonBlocking())
   {
     return false;
   }
@@ -160,7 +160,7 @@ void TransportTCP::parseHeader(const Header& header)
 
 void TransportTCP::setNoDelay(bool nodelay)
 {
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if(closed_)
     return;
 
@@ -174,7 +174,7 @@ void TransportTCP::setNoDelay(bool nodelay)
 
 void TransportTCP::setKeepAlive(bool use, uint32_t idle, uint32_t interval, uint32_t count)
 {
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if(closed_)
     return;
 
@@ -219,7 +219,7 @@ void TransportTCP::setKeepAlive(bool use, uint32_t idle, uint32_t interval, uint
 
 bool TransportTCP::connect(const std::string& host, int port)
 {
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if(closed_)
     return false;
 
@@ -236,7 +236,7 @@ bool TransportTCP::connect(const std::string& host, int port)
     return false;
   }
 
-  setNonBlocking();
+  _setNonBlocking();
 
   sockaddr_storage sas;
   socklen_t sas_len;
@@ -271,6 +271,7 @@ bool TransportTCP::connect(const std::string& host, int port)
 
     if (getaddrinfo(host.c_str(), NULL, &hints, &addr) != 0)
     {
+      lock.unlock();
       close();
       ROS_ERROR("couldn't resolve publisher host [%s]", host.c_str());
       return false;
@@ -345,7 +346,7 @@ bool TransportTCP::connect(const std::string& host, int port)
   ss << host << ":" << port << " on socket " << sock_;
   cached_remote_host_ = ss.str();
 
-  if (!initializeSocket())
+  if (!_initializeSocket())
   {
     return false;
   }
@@ -364,7 +365,7 @@ bool TransportTCP::connect(const std::string& host, int port)
 
 bool TransportTCP::listen(int port, int backlog, const AcceptCallback& accept_cb)
 {
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if(closed_)
     return false;
 
@@ -376,8 +377,8 @@ bool TransportTCP::listen(int port, int backlog, const AcceptCallback& accept_cb
     sock_ = socket(AF_INET6, SOCK_STREAM, 0);
     sockaddr_in6 *address = (sockaddr_in6 *)&server_address_;
     address->sin6_family = AF_INET6;
-    address->sin6_addr = isOnlyLocalhostAllowed() ? 
-                         in6addr_loopback : 
+    address->sin6_addr = isOnlyLocalhostAllowed() ?
+                         in6addr_loopback :
                          in6addr_any;
     address->sin6_port = htons(port);
     sa_len_ = sizeof(sockaddr_in6);
@@ -387,8 +388,8 @@ bool TransportTCP::listen(int port, int backlog, const AcceptCallback& accept_cb
     sock_ = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in *address = (sockaddr_in *)&server_address_;
     address->sin_family = AF_INET;
-    address->sin_addr.s_addr = isOnlyLocalhostAllowed() ? 
-                               htonl(INADDR_LOOPBACK) : 
+    address->sin_addr.s_addr = isOnlyLocalhostAllowed() ?
+                               htonl(INADDR_LOOPBACK) :
                                INADDR_ANY;
     address->sin_port = htons(port);
     sa_len_ = sizeof(sockaddr_in);
@@ -420,14 +421,16 @@ bool TransportTCP::listen(int port, int backlog, const AcceptCallback& accept_cb
       break;
   }
 
-  if (!initializeSocket())
+  if (!_initializeSocket())
   {
     return false;
   }
 
   if (!(flags_ & SYNCHRONOUS))
   {
+    lock.unlock();
     enableRead();
+    return true;
   }
 
   return true;
@@ -440,7 +443,7 @@ void TransportTCP::close()
   if (!closed_)
   {
     {
-      boost::recursive_mutex::scoped_lock lock(close_mutex_);
+      boost::mutex::scoped_lock lock(mutex_);
 
       if (!closed_)
       {
@@ -481,7 +484,7 @@ void TransportTCP::close()
 
 int32_t TransportTCP::read(uint8_t* buffer, uint32_t size)
 {
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
 
   if (closed_)
   {
@@ -499,6 +502,7 @@ int32_t TransportTCP::read(uint8_t* buffer, uint32_t size)
 	if ( !last_socket_error_is_would_block() ) // !WSAWOULDBLOCK / !EAGAIN && !EWOULDBLOCK
     {
       ROSCPP_LOG_DEBUG("recv() on socket [%d] failed with error [%s]", sock_, last_socket_error_string());
+      lock.unlock();
       close();
     }
     else
@@ -509,6 +513,7 @@ int32_t TransportTCP::read(uint8_t* buffer, uint32_t size)
   else if (num_bytes == 0)
   {
     ROSCPP_LOG_DEBUG("Socket [%d] received 0/%u bytes, closing", sock_, size);
+    lock.unlock();
     close();
     return -1;
   }
@@ -518,7 +523,7 @@ int32_t TransportTCP::read(uint8_t* buffer, uint32_t size)
 
 int32_t TransportTCP::write(uint8_t* buffer, uint32_t size)
 {
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
 
   if (closed_)
   {
@@ -536,6 +541,7 @@ int32_t TransportTCP::write(uint8_t* buffer, uint32_t size)
     if ( !last_socket_error_is_would_block() )
     {
       ROSCPP_LOG_DEBUG("send() on socket [%d] failed with error [%s]", sock_, last_socket_error_string());
+      lock.unlock();
       close();
     }
     else
@@ -551,7 +557,7 @@ void TransportTCP::enableRead()
 {
   ROS_ASSERT(!(flags_ & SYNCHRONOUS));
 
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if (closed_)
     return;
 
@@ -566,7 +572,7 @@ void TransportTCP::disableRead()
 {
   ROS_ASSERT(!(flags_ & SYNCHRONOUS));
 
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if (closed_)
     return;
 
@@ -581,7 +587,7 @@ void TransportTCP::enableWrite()
 {
   ROS_ASSERT(!(flags_ & SYNCHRONOUS));
 
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if (closed_)
     return;
 
@@ -596,7 +602,7 @@ void TransportTCP::disableWrite()
 {
   ROS_ASSERT(!(flags_ & SYNCHRONOUS));
 
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
 
   if (closed_)
   {
@@ -614,7 +620,7 @@ TransportTCPPtr TransportTCP::accept()
 {
   ROS_ASSERT(is_server_);
 
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if(closed_)
     return TransportTCPPtr();
 
@@ -626,7 +632,7 @@ TransportTCPPtr TransportTCP::accept()
     ROSCPP_LOG_DEBUG("Accepted connection on socket [%d], new socket [%d]", sock_, new_sock);
 
     TransportTCPPtr transport(new TransportTCP(poll_set_, flags_));
-    if (!transport->setSocket(new_sock))
+    if (!transport->_setSocket(new_sock))
     {
       ROS_ERROR("Failed to set socket on transport for socket %d", new_sock);
     }
@@ -643,7 +649,7 @@ TransportTCPPtr TransportTCP::accept()
 
 void TransportTCP::socketUpdate(int events)
 {
-  // If we call a callback while holding the close_mutex_, we might cause a
+  // If we call a callback while holding the mutex_, we might cause a
   // deadlock. It is unnecessary anyway, since any TransportTCP methods
   // called by the callback will lock the mutex again.
 
@@ -651,7 +657,7 @@ void TransportTCP::socketUpdate(int events)
 
   // First determine the callbacks that we need to call
   {
-    boost::recursive_mutex::scoped_lock lock(close_mutex_);
+    boost::mutex::scoped_lock lock(mutex_);
     if (closed_)
     {
       return;
@@ -697,7 +703,7 @@ void TransportTCP::socketUpdate(int events)
 
   // Now we can re-lock the mutex and handle socket errors
   {
-    boost::recursive_mutex::scoped_lock lock(close_mutex_);
+    boost::mutex::scoped_lock lock(mutex_);
     if (closed_)
     {
       return;
@@ -721,13 +727,10 @@ void TransportTCP::socketUpdate(int events)
       ROSCPP_LOG_DEBUG("Socket %d closed with (ERR|HUP|NVAL) events %d: %s", sock_, events, strerror(error));
     #endif
 
-      should_close = true;
+      lock.unlock();
+      close();
     }
   }
-
-  // Call close() without the mutex held
-  if(should_close)
-    close();
 }
 
 std::string TransportTCP::getTransportInfo()
@@ -741,7 +744,7 @@ std::string TransportTCP::getClientURI()
 {
   ROS_ASSERT(!is_server_);
 
-  boost::recursive_mutex::scoped_lock lock(close_mutex_);
+  boost::mutex::scoped_lock lock(mutex_);
   if (closed_)
   {
     return std::string();
