@@ -129,6 +129,7 @@ private:
    * \brief Initializes the assigned socket -- sets it to non-blocking and enables reading
    */
   bool _initializeSocket();
+  void _setKeepAlive(bool use, uint32_t idle, uint32_t interval, uint32_t count);
 
   bool _setNonBlocking();
 

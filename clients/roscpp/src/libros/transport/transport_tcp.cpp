@@ -97,7 +97,7 @@ bool TransportTCP::_initializeSocket()
     return false;
   }
 
-  setKeepAlive(s_use_keepalive_, 60, 10, 9);
+  _setKeepAlive(s_use_keepalive_, 60, 10, 9);
 
   // connect() will set cached_remote_host_ because it already has the host/port available
   if (cached_remote_host_.empty())
@@ -178,6 +178,11 @@ void TransportTCP::setKeepAlive(bool use, uint32_t idle, uint32_t interval, uint
   if(closed_)
     return;
 
+  setKeepAlive(use, idle, interval, count);
+}
+
+void TransportTCP::_setKeepAlive(bool use, uint32_t idle, uint32_t interval, uint32_t count)
+{
   if (use)
   {
     int val = 1;
