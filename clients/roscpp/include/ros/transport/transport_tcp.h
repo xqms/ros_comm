@@ -134,6 +134,11 @@ private:
   bool _setNonBlocking();
 
   /**
+   * \brief Accept a connection on a server socket.  Blocks until a connection is available
+   */
+  TransportTCPPtr _accept();
+
+  /**
    * \brief Set the socket to be used by this transport
    * \param sock A valid TCP socket
    * \return Whether setting the socket was successful

@@ -623,11 +623,16 @@ void TransportTCP::disableWrite()
 
 TransportTCPPtr TransportTCP::accept()
 {
-  ROS_ASSERT(is_server_);
-
   boost::mutex::scoped_lock lock(mutex_);
   if(closed_)
     return TransportTCPPtr();
+
+  return _accept();
+}
+
+TransportTCPPtr TransportTCP::_accept()
+{
+  ROS_ASSERT(is_server_);
 
   sockaddr client_address;
   socklen_t len = sizeof(client_address);
