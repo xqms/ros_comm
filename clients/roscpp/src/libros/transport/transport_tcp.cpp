@@ -680,7 +680,7 @@ void TransportTCP::socketUpdate(int events)
       {
         // Should not block here, because poll() said that it's ready
         // for reading
-        TransportTCPPtr transport = accept();
+        TransportTCPPtr transport = _accept();
         if (transport)
         {
           ROS_ASSERT(accept_cb_);
