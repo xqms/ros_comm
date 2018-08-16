@@ -42,53 +42,8 @@
 namespace po = boost::program_options;
 
 //! Parse the command-line arguments for recorder options
-rosbag::RecorderOptions parseOptions(int argc, char** argv) {
+rosbag::RecorderOptions parseOptions(const po::variables_map& vm) {
     rosbag::RecorderOptions opts;
-
-    po::options_description desc("Allowed options");
-
-    desc.add_options()
-      ("help,h", "produce help message")
-      ("all,a", "record all topics")
-      ("regex,e", "match topics using regular expressions")
-      ("exclude,x", po::value<std::string>(), "exclude topics matching regular expressions")
-      ("quiet,q", "suppress console output")
-      ("output-prefix,o", po::value<std::string>(), "prepend PREFIX to beginning of bag name")
-      ("output-name,O", po::value<std::string>(), "record bagnamed NAME.bag")
-      ("buffsize,b", po::value<int>()->default_value(256), "Use an internal buffer of SIZE MB (Default: 256)")
-      ("chunksize", po::value<int>()->default_value(768), "Set chunk size of message data, in KB (Default: 768. Advanced)")
-      ("limit,l", po::value<int>()->default_value(0), "Only record NUM messages on each topic")
-      ("min-space,L", po::value<std::string>()->default_value("1G"), "Minimum allowed space on recording device (use G,M,k multipliers)")
-      ("bz2,j", "use BZ2 compression")
-      ("lz4", "use LZ4 compression")
-      ("split", po::value<int>()->implicit_value(0), "Split the bag file and continue recording when maximum size or maximum duration reached.")
-      ("max-splits", po::value<int>(), "Keep a maximum of N bag files, when reaching the maximum erase the oldest one to keep a constant number of files.")
-      ("topic", po::value< std::vector<std::string> >(), "topic to record")
-      ("size", po::value<uint64_t>(), "The maximum size of the bag to record in MB.")
-      ("duration", po::value<std::string>(), "Record a bag of maximum duration in seconds, unless 'm', or 'h' is appended.")
-      ("node", po::value<std::string>(), "Record all topics subscribed to by a specific node.");
-
-  
-    po::positional_options_description p;
-    p.add("topic", -1);
-    
-    po::variables_map vm;
-    
-    try 
-    {
-      po::store(po::command_line_parser(argc, argv).options(desc).positional(p).run(), vm);
-    } catch (boost::program_options::invalid_command_line_syntax& e)
-    {
-      throw ros::Exception(e.what());
-    }  catch (boost::program_options::unknown_option& e)
-    {
-      throw ros::Exception(e.what());
-    }
-
-    if (vm.count("help")) {
-      std::cout << desc << std::endl;
-      exit(0);
-    }
 
     if (vm.count("all"))
       opts.record_all = true;
@@ -263,13 +218,73 @@ rosbag::RecorderOptions parseOptions(int argc, char** argv) {
     return opts;
 }
 
+void printStatistics(rosbag::Recorder* recorder)
+{
+    std::map<std::string, rosbag::TopicStats> stats = recorder->statistics();
+
+    puts("\033[2J\033[1;1H");
+    puts("Recorder statistics:\n\n");
+
+    for(std::map<std::string, rosbag::TopicStats>::iterator it = stats.begin(); it != stats.end(); ++it) {
+        printf("%-40s: %5lu messages, %2u publishers\n",
+            it->first.c_str(), it->second.num_messages, it->second.num_publishers
+        );
+    }
+}
+
 int main(int argc, char** argv) {
     ros::init(argc, argv, "record", ros::init_options::AnonymousName);
+
+    po::options_description desc("Allowed options");
+
+    desc.add_options()
+      ("help,h", "produce help message")
+      ("all,a", "record all topics")
+      ("regex,e", "match topics using regular expressions")
+      ("exclude,x", po::value<std::string>(), "exclude topics matching regular expressions")
+      ("quiet,q", "suppress console output")
+      ("output-prefix,o", po::value<std::string>(), "prepend PREFIX to beginning of bag name")
+      ("output-name,O", po::value<std::string>(), "record bagnamed NAME.bag")
+      ("buffsize,b", po::value<int>()->default_value(256), "Use an internal buffer of SIZE MB (Default: 256)")
+      ("chunksize", po::value<int>()->default_value(768), "Set chunk size of message data, in KB (Default: 768. Advanced)")
+      ("limit,l", po::value<int>()->default_value(0), "Only record NUM messages on each topic")
+      ("min-space,L", po::value<std::string>()->default_value("1G"), "Minimum allowed space on recording device (use G,M,k multipliers)")
+      ("bz2,j", "use BZ2 compression")
+      ("lz4", "use LZ4 compression")
+      ("split", po::value<int>()->implicit_value(0), "Split the bag file and continue recording when maximum size or maximum duration reached.")
+      ("max-splits", po::value<int>(), "Keep a maximum of N bag files, when reaching the maximum erase the oldest one to keep a constant number of files.")
+      ("topic", po::value< std::vector<std::string> >(), "topic to record")
+      ("size", po::value<uint64_t>(), "The maximum size of the bag to record in MB.")
+      ("duration", po::value<std::string>(), "Record a bag of maximum duration in seconds, unless 'm', or 'h' is appended.")
+      ("node", po::value<std::string>(), "Record all topics subscribed to by a specific node.")
+      ("monitor", "Display live statistics")
+    ;
+
+    po::positional_options_description p;
+    p.add("topic", -1);
+
+    po::variables_map vm;
+
+    try
+    {
+      po::store(po::command_line_parser(argc, argv).options(desc).positional(p).run(), vm);
+    } catch (boost::program_options::invalid_command_line_syntax& e)
+    {
+      throw ros::Exception(e.what());
+    }  catch (boost::program_options::unknown_option& e)
+    {
+      throw ros::Exception(e.what());
+    }
+
+    if (vm.count("help")) {
+      std::cout << desc << std::endl;
+      exit(0);
+    }
 
     // Parse the command-line options
     rosbag::RecorderOptions opts;
     try {
-        opts = parseOptions(argc, argv);
+        opts = parseOptions(vm);
     }
     catch (ros::Exception const& ex) {
         ROS_ERROR("Error reading options: %s", ex.what());
@@ -281,7 +296,16 @@ int main(int argc, char** argv) {
     }
 
     // Run the recorder
+    ros::NodeHandle nh;
     rosbag::Recorder recorder(opts);
+    ros::SteadyTimer monitorTimer;
+
+    if(vm.count("monitor")) {
+        monitorTimer = nh.createSteadyTimer(ros::WallDuration(1.0),
+            boost::bind(printStatistics, &recorder)
+        );
+    }
+
     int result = recorder.run();
     
     return result;

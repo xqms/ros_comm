@@ -84,6 +84,21 @@ public:
     ros::Time                    time;
 };
 
+struct ROSBAG_DECL TopicStats
+{
+    TopicStats();
+
+    unsigned int num_publishers;
+    uint64_t num_messages;
+};
+
+struct ROSBAG_DECL TopicHandle
+{
+    boost::shared_ptr<ros::Subscriber> sub;
+    TopicStats stats;
+    uint64_t count;
+};
+
 struct ROSBAG_DECL RecorderOptions
 {
     RecorderOptions();
@@ -125,6 +140,8 @@ public:
 
     boost::shared_ptr<ros::Subscriber> subscribe(std::string const& topic);
 
+    std::map<std::string, TopicStats> statistics();
+
     int run();
 
 private:
@@ -140,7 +157,7 @@ private:
 
     void snapshotTrigger(std_msgs::Empty::ConstPtr trigger);
     //    void doQueue(topic_tools::ShapeShifter::ConstPtr msg, std::string const& topic, boost::shared_ptr<ros::Subscriber> subscriber, boost::shared_ptr<int> count);
-    void doQueue(const ros::MessageEvent<topic_tools::ShapeShifter const>& msg_event, std::string const& topic, boost::shared_ptr<ros::Subscriber> subscriber, boost::shared_ptr<int> count);
+    void doQueue(const ros::MessageEvent<topic_tools::ShapeShifter const>& msg_event, std::string const& topic, const boost::shared_ptr<TopicHandle>& handle);
     void doRecord();
     void checkNumSplits();
     bool checkSize();
@@ -185,6 +202,9 @@ private:
     boost::mutex                  check_disk_mutex_;
     ros::WallTime                 check_disk_next_;
     ros::WallTime                 warn_next_;
+
+    typedef std::map< std::string, boost::shared_ptr<TopicHandle> > TopicMap;
+    TopicMap topics_;
 };
 
 } // namespace rosbag

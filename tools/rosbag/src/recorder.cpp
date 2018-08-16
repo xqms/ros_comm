@@ -88,6 +88,13 @@ OutgoingQueue::OutgoingQueue(string const& _filename, std::queue<OutgoingMessage
 {
 }
 
+// TopicStats
+
+TopicStats::TopicStats() :
+    num_publishers(0), num_messages(0)
+{
+}
+
 // RecorderOptions
 
 RecorderOptions::RecorderOptions() :
@@ -209,11 +216,13 @@ int Recorder::run() {
 }
 
 shared_ptr<ros::Subscriber> Recorder::subscribe(string const& topic) {
-	ROS_INFO("Subscribing to %s", topic.c_str());
+    ROS_INFO("Subscribing to %s", topic.c_str());
 
     ros::NodeHandle nh;
-    shared_ptr<int> count(boost::make_shared<int>(options_.limit));
-    shared_ptr<ros::Subscriber> sub(boost::make_shared<ros::Subscriber>());
+    boost::shared_ptr<TopicHandle> handle(new TopicHandle);
+
+    handle->count = options_.limit;
+    handle->sub = boost::make_shared<ros::Subscriber>();
 
     ros::SubscribeOptions ops;
     ops.topic = topic;
@@ -222,13 +231,14 @@ shared_ptr<ros::Subscriber> Recorder::subscribe(string const& topic) {
     ops.datatype = ros::message_traits::datatype<topic_tools::ShapeShifter>();
     ops.helper = boost::make_shared<ros::SubscriptionCallbackHelperT<
         const ros::MessageEvent<topic_tools::ShapeShifter const> &> >(
-            boost::bind(&Recorder::doQueue, this, _1, topic, sub, count));
-    *sub = nh.subscribe(ops);
+            boost::bind(&Recorder::doQueue, this, _1, topic, handle));
+    *(handle->sub) = nh.subscribe(ops);
 
     currently_recording_.insert(topic);
+    topics_[topic] = handle;
     num_subscribers_++;
 
-    return sub;
+    return handle->sub;
 }
 
 bool Recorder::isSubscribed(string const& topic) const {
@@ -283,17 +293,19 @@ std::string Recorder::timeToStr(T ros_t)
 }
 
 //! Callback to be invoked to save messages into a queue
-void Recorder::doQueue(const ros::MessageEvent<topic_tools::ShapeShifter const>& msg_event, string const& topic, shared_ptr<ros::Subscriber> subscriber, shared_ptr<int> count) {
+void Recorder::doQueue(const ros::MessageEvent<topic_tools::ShapeShifter const>& msg_event, string const& topic, const shared_ptr<TopicHandle>& handle) {
     //void Recorder::doQueue(topic_tools::ShapeShifter::ConstPtr msg, string const& topic, shared_ptr<ros::Subscriber> subscriber, shared_ptr<int> count) {
     Time rectime = Time::now();
     
     if (options_.verbose)
-        cout << "Received message on topic " << subscriber->getTopic() << endl;
+        cout << "Received message on topic " << handle->sub->getTopic() << endl;
 
     OutgoingMessage out(topic, msg_event.getMessage(), msg_event.getConnectionHeaderPtr(), rectime);
     
     {
         boost::mutex::scoped_lock lock(queue_mutex_);
+
+        handle->stats.num_messages++;
 
         queue_->push(out);
         queue_size_ += out.msg->size();
@@ -318,10 +330,10 @@ void Recorder::doQueue(const ros::MessageEvent<topic_tools::ShapeShifter const>&
         queue_condition_.notify_all();
 
     // If we are book-keeping count, decrement and possibly shutdown
-    if ((*count) > 0) {
-        (*count)--;
-        if ((*count) == 0) {
-            subscriber->shutdown();
+    if (handle->count > 0) {
+        handle->count--;
+        if (handle->count == 0) {
+            handle->sub->shutdown();
 
             num_subscribers_--;
 
@@ -700,6 +712,27 @@ bool Recorder::checkLogging() {
         ROS_WARN("Not logging message because logging disabled.  Most likely cause is a full disk.");
     }
     return false;
+}
+
+std::map<std::string, TopicStats> Recorder::statistics()
+{
+    // update publisher counts
+    for(TopicMap::iterator it = topics_.begin(); it != topics_.end(); ++it)
+    {
+        it->second->stats.num_publishers = it->second->sub->getNumPublishers();
+    }
+
+    std::map<std::string, TopicStats> ret;
+
+    {
+        boost::unique_lock<boost::mutex> lock(queue_mutex_);
+        for(TopicMap::const_iterator it = topics_.begin(); it != topics_.end(); ++it)
+        {
+            ret[it->first] = it->second->stats;
+        }
+    }
+
+    return ret;
 }
 
 } // namespace rosbag
